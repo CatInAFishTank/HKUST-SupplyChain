@@ -1,0 +1,151 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+contract HKUSTSupplyChain is Ownable {
+    constructor() Ownable(msg.sender) {}
+    enum Status {
+        Ordered,
+        Shipped,
+        Delivered,
+        Cancelled
+    }
+
+    struct Item {
+        uint id;
+        string name;
+        Status status;
+        address orderedBy;
+        address approvedBy;
+        address deliveredTo;
+    }
+
+    struct Loan {
+        uint256 amount;
+        uint256 dueDate;
+        bool paid;
+    }
+    mapping(address => uint256[]) private companiesOrders;
+    mapping(uint => Item) private items;
+    mapping(address => Loan) private loans;
+    uint private itemCount;
+    uint256 private nonce = 0;
+    uint256[] private itemIds;
+
+    uint256 private constant MIN_ORDERS_FOR_LOAN = 5;
+    uint256 private constant LOAN_AMOUNT_PER_ORDER = 1 ether;
+
+    function getRandomNumber() internal returns (uint256) {
+        uint256 randomNumber = uint256(keccak256(abi.encodePacked(block.timestamp, block.prevrandao, msg.sender, nonce)));
+        nonce++;
+        return randomNumber;
+    }
+
+    function getRandomFourDigitNumber() internal returns (uint256) {
+        uint256 randomNumber = getRandomNumber();
+        uint256 fourDigitNumber = uint256(randomNumber % 10000);
+        return fourDigitNumber;
+    }
+
+ function orderItem(string memory _name) public {
+        uint256 newItemId = getRandomFourDigitNumber();
+        Item memory newItem = Item({
+            id: newItemId,
+            name: _name,
+            status: Status.Ordered,
+            orderedBy: msg.sender,
+            approvedBy: address(0),
+            deliveredTo: address(0)
+        });
+        items[newItemId] = newItem;
+        itemIds.push(newItemId);
+        companiesOrders[msg.sender].push(newItemId);
+        itemCount++;
+    }
+ 
+
+    function cancelItem(uint _id) public {
+        require(
+            items[_id].orderedBy == msg.sender,
+            "Only the person who ordered the item can cancel it"
+        );
+        require(
+            items[_id].status == Status.Ordered,
+            "Item can only be cancelled if it is in the Ordered state"
+        );
+        items[_id].status = Status.Cancelled;
+    }
+
+    function approveItem(uint256 _id) public onlyOwner {
+        require(
+            items[_id].status == Status.Ordered,
+            "Item must be in Ordered state to be approved"
+        );
+        items[_id].status = Status.Shipped;
+        items[_id].approvedBy = msg.sender;
+    }
+
+    function shipItem(uint256 _id) public onlyOwner {
+        require(
+            items[_id].status == Status.Shipped,
+            "Item must be in Shipped state to be shipped"
+        );
+        items[_id].status = Status.Delivered;
+        items[_id].deliveredTo = items[_id].orderedBy;
+    }
+
+    function getItemStatus(uint _id) public view returns (Status) {
+        return items[_id].status;
+    }
+
+    function getItem(uint _id) public view returns (Item memory) {
+        require(items[_id].id != 0, "No item with the specified ID");
+        return items[_id];
+    }
+
+    function getItemCount() public view returns (uint) {
+        return itemCount;
+    }
+
+    function getAllItems() public view returns (Item[] memory) {
+        Item[] memory allItems = new Item[](itemIds.length);
+        for (uint256 i = 0; i < itemIds.length; i++) {
+            allItems[i] = items[itemIds[i]];
+        }
+        return allItems;
+    }
+
+       function getCompanyOrderCount(address _company) public view returns (uint256) {
+        return companiesOrders[_company].length;
+    }
+
+    function applyLoan() public {
+        require(loans[msg.sender].amount == 0, "You already have an active loan");
+
+        uint256 companyOrderCount = getCompanyOrderCount(msg.sender);
+
+        require(companyOrderCount >= MIN_ORDERS_FOR_LOAN, "Insufficient orders to apply for a loan");
+
+        uint256 loanAmount = companyOrderCount * LOAN_AMOUNT_PER_ORDER;
+        loans[msg.sender] = Loan({
+            amount: loanAmount,
+            dueDate: block.timestamp + 30 days,
+            paid: false
+        });
+    }
+
+    function payLoan() public payable {
+        Loan storage loan = loans[msg.sender];
+        require(loan.amount > 0, "You don't have an active loan");
+        require(msg.value >= loan.amount, "Insufficient payment amount");
+        require(!loan.paid, "Loan already paid");
+        loan.paid = true;
+        payable(owner()).transfer(msg.value);
+    }
+
+    function getLoanDetails(address _company) public view returns (uint256, uint256, bool) {
+        Loan memory loan = loans[_company];
+        return (loan.amount, loan.dueDate, loan.paid);
+    }
+}
